@@ -3,7 +3,7 @@
 % Add TbCAPs + SPM to the path
 
 % Mac
-% addpath('/Users/npsabet/TbCAPs');   
+% addpath('/Users/npsabet/TbCAPS');   
 % addpath('/Users/npsabet/spm12');
 % addpath('/Users/npsabet/TbCAPs/control_pre_test_subj/');
 
@@ -33,7 +33,7 @@ files = spm_select('FPList', subj_dir, '.*\.nii$');
 disp(files(1:min(size(files,1),5), :));  % first few paths
 
 % Load subject header to use as reference space
-% ref_img  = '/Users/npsabet/TbCAPs/control_pre_test_subj/swauRDHC003_pre/swauRDHC003_pre_00001.nii';
+% ref_img  = '/Users/npsabet/TbCAPS/control_pre_test_subj/swauRDHC003_pre/swauRDHC003_pre_00001.nii';
 ref_img  = '/home/nsabet/RDoC_CAP/RDoC_Controls_Pre/swauRDHC001_pre/swauRDHC001_pre_00001.nii';
 Vref     = spm_vol(ref_img);
 
@@ -190,7 +190,11 @@ K_range = 2:8;
 % xlabel('K'); ylabel('Quality metric');
 % title('Test run: consensus clustering quality');
 
-save(fullfile('/home/nsabet/TbCAPs/SavedData', ...
+save(fullfile('/home/nsabet/TbCAPS/SavedData', ...
     sprintf('Consensus_%s.mat', datestr(now,'yyyymmdd_HHMM'))), ...
-    'Consensus','K_range','Pcc','N','-v7.3');
+    'Consensus','K_range','N','Pcc', ...       % consensus results
+    'Xon','Indices','mask','brain_info', ...   % needed for clustering
+    'FD','Tmot','ref_img', ...                 % motion & reference info
+    '-v7.3');                                  % large-variable safe
 
+% 2.5 hours with script for 29 subjects, k=2:8, N folds = 20 
