@@ -208,6 +208,30 @@ mean_val = mean(Xon(:));
 std_val  = std(Xon(:));
 fprintf('Xon global mean ~ %.3f, std ~ %.3f (expected ~0, ~1)\n', mean_val, std_val);
 
+% 8. Inspect structure of Xonp vs Xon
+fprintf('\n=== Inspecting retained frames structure ===\n');
+fprintf('Xonp is a %s with %d subjects\n', class(Xonp), numel(Xonp));
+for s = 1:min(5,numel(Xonp))
+    fprintf('  Subj %2d: size = %d voxels × %d frames\n', ...
+        s, size(Xonp{s},1), size(Xonp{s},2));
+end
+fprintf('\nXon is a %s of size %d frames × %d voxels\n', ...
+    class(Xon), size(Xon,1), size(Xon,2));
+
+total_frames_cell = sum(cellfun(@(x) size(x,2), Xonp));
+fprintf('Sum of frames across Xonp = %d | Rows in pooled Xon = %d\n', ...
+    total_frames_cell, size(Xon,1));
+
+if total_frames_cell == size(Xon,1)
+    fprintf('PASS: pooled Xon matches concatenated Xonp\n');
+else
+    warning('Mismatch: pooled Xon rows ≠ sum of Xonp frames!');
+end
+
+vox_per_subj = unique(cellfun(@(x) size(x,1), Xonp));
+fprintf('Unique voxel counts in Xonp = %s | Columns in Xon = %d | Mask voxels = %d\n', ...
+    mat2str(vox_per_subj), size(Xon,2), sum(mask));
+
 fprintf('================= END QC =================\n\n');
 
 %% 4. Consensus clustering (determine optimum K)
@@ -224,8 +248,8 @@ N   = 20;      % number of folds
 K_range = 2:8; % cluster range to test
 
 % --- Run consensus clustering (overnight job) ---
-% NOTE: Comment out while testing. Run only when ready.
-[Consensus] = CAP_ConsensusClustering(Xon, K_range, 'items', Pcc/100, N, 'correlation');
+% IMPORTANT: use Xonp (cell array), not Xon
+[Consensus] = CAP_ConsensusClustering(Xonp, K_range, 'items', Pcc/100, N, 'correlation');
 [~, Qual]   = ComputeClusteringQuality(Consensus,[]);
 
 % --- Inspect Qual after run ---
@@ -235,18 +259,16 @@ K_range = 2:8; % cluster range to test
 % title('Consensus clustering quality');
 
 % --- CAP_Zscore note ---
-% You only need CAP_Zscore *after clustering*, when you have the CAP maps.
-% Right now you don’t have CAP maps (that comes from k-means inside consensus).
-% So keep this line commented out until then:
-CAPs_z = CAP_Zscore(CAPs);
+% Only apply to CAP maps *after final clustering* (Script 2).
+% Leave commented here:
+% CAPs_z = CAP_Zscore(CAPs);
 
-% --- Save checkpoint (metadata only, lighter than Xon) ---
-save(fullfile('/home/nsabet/TbCAPs/SavedData', ...
+% --- Save checkpoint ---
+save(fullfile('/home/nsabet/TbCAPS/SavedData', ...
     sprintf('PreConsensus_%s.mat', datestr(now,'yyyymmdd_HHMM'))), ...
-    'Indices','FDmat','mask','brain_info','Tmot','-v7.3');
+    'Indices','FDmat','mask','mask3D','brain_info','Tmot','Xon','Xonp','-v7.3');
 
-% When you run consensus overnight, you can save Consensus as well:
-% save(fullfile('/home/nsabet/TbCAPs/SavedData', ...
-%     sprintf('Consensus_%s.mat', datestr(now,'yyyymmdd_HHMM'))), ...
-%     'Consensus','K_range','N','Pcc','-v7.3');
-
+% When you run consensus overnight, you can also save Consensus:
+save(fullfile('/home/nsabet/TbCAPS/SavedData', ...
+    sprintf('Consensus_%s.mat', datestr(now,'yyyymmdd_HHMM'))), ...
+    'Consensus','K_range','N','Pcc','-v7.3');
