@@ -10,7 +10,7 @@ rng(0);
 % ---------- Location toggle ----------
 % Loc = 1 → Mac
 % Loc = 2 → Server
-Loc = 1;
+Loc = 2;
 
 if Loc == 1
     addpath('/Users/npsabet/TbCAPS');   
@@ -202,67 +202,37 @@ for ds = 1:n_datasets
     fprintf('All subjects consistent: each TC has %d masked voxels.\n', nMasked);
 end
 
-%% 3. Selecting the frames to analyse (seed-free, GUI-faithful)
+%% 3. Selecting the frames to analyse (seed-free)
 
 Tmot = 0.5;    % motion scrubbing threshold [mm]
 fprintf('\n=== Frame selection (seed-free; Tmot = %.2f mm) ===\n', Tmot);
 
-% Containers
 Xonp        = cell(1, n_datasets);   % per-dataset retained frames (cell of subj-cells)
-RetainedPct = cell(1, n_datasets);   % per-dataset retained percentages
-FrameIdx    = cell(1, n_datasets);   % per-dataset frame indices
+RetainedPct = cell(1, n_datasets);   
+FrameIdx    = cell(1, n_datasets);   
 
 for ds = 1:n_datasets
     fprintf('\n--- Dataset %d/%d ---\n', ds, n_datasets);
 
-    % Run TbCAPs helper (same as GUI’s SeedFreeButton_Callback)
     [Xonp{ds}, p_ds, Indices_ds] = CAP_find_activity_SeedFree(TC{ds}, FD{ds}, Tmot);
 
-    % Convert each subject’s matrix to single right away to save memory
+    % shrink to single
     for s = 1:numel(Xonp{ds})
         Xonp{ds}{s} = single(Xonp{ds}{s});
     end
 
-    % Store outputs
     RetainedPct{ds} = p_ds(3,:);   
     FrameIdx{ds}    = Indices_ds;  
 
-    % QC: per-subject frame retention
-    nTP = size(FD{ds},1);
-    for s = 1:n_subjects{ds}
-        nKept  = sum(Indices_ds.kept.active(:,s));
-        nScrub = sum(Indices_ds.scrubbed(:,s));
-        fprintf('  Subj %2d: kept %3d / %3d (%.1f%%), scrubbed %3d\n', ...
-            s, nKept, nTP, 100*nKept/nTP, nScrub);
-    end
     fprintf('  Dataset %d total retained frames = %d\n', ...
         ds, sum(cellfun(@(x) size(x,2), Xonp{ds})));
 end
 
-% =============================
-% Pool frames across reference group ONLY
-% =============================
-fprintf('\nPooling retained frames from ReferencePopulation only (dataset %d)...\n', ReferencePopulation);
-
-% Instead of giant horzcat in double precision → use single
-Xon_ref = single(horzcat(Xonp{ReferencePopulation}{:})');   % [frames × voxels]
-
-fprintf('Pooled Xon_ref size = %d frames × %d voxels\n', size(Xon_ref,1), size(Xon_ref,2));
-
-% QC: voxel count vs mask
-assert(size(Xon_ref,2) == sum(mask{ReferencePopulation}), ...
-    'Mismatch: Xon_ref has %d voxels, mask has %d', ...
-    size(Xon_ref,2), sum(mask{ReferencePopulation}));
-
-% Handle NaNs / Infs efficiently
-badCols = find(any(~isfinite(Xon_ref),1));
-if ~isempty(badCols)
-    fprintf('Warning: %d voxel columns had NaN/Inf; setting to 0.\n', numel(badCols));
-    Xon_ref(:,badCols) = 0;
-end
-
-fprintf('Final Xon_ref (for clustering) = %d frames × %d voxels\n', ...
-    size(Xon_ref,1), size(Xon_ref,2));
+% --- QC print without pooling ---
+fprintf('Consensus input prepared: %d subjects, ~%d frames total, %d voxels.\n', ...
+    n_subjects{ReferencePopulation}, ...
+    sum(cellfun(@(x) size(x,2), Xonp{ReferencePopulation})), ...
+    size(Xonp{ReferencePopulation}{1},1));
 
 % =============================
 % Frame retention violin plots
@@ -277,6 +247,17 @@ fprintf('Final Xon_ref (for clustering) = %d frames × %d voxels\n', ...
 % 
 % set(TPViolin,'Visible','on');
 % title(ax, 'Frame retention across subject groups');
+
+% ============================================
+% CLEANUP before Consensus to save memory
+% ============================================
+
+% Once frames are pooled, TC and FD are not needed anymore
+clear TC FD
+
+% Show memory footprint
+S = whos;
+fprintf('Workspace memory before consensus: %.2f GB\n', sum([S.bytes]) / 1e9);
 
 
  %% QC BEFORE CONSENSUS
@@ -341,53 +322,62 @@ fprintf('Workspace memory use: %.2f GB\n', sum([S.bytes]) / 1e9);
 
 %% 4. Consensus clustering (determine optimum K)
 
-% Log console output to file
 logfile = fullfile(save_dir, sprintf('CAP_log_%s.txt', datestr(now,'yyyymmdd_HHMM')));
-diary(logfile);
-diary on
+diary(logfile); diary on
 
-% Parameters (TEST run)
-Pcc     = 100;      % % of frames per fold
-N       = 2;        % number of folds
-K_range = 2:3;      % test range (expand later)
+Pcc     = 80;   
+N       = 10;   
+K_range = 2:6;  
 
 fprintf('Subjects in dataset = %d\n', n_subjects{ReferencePopulation});
 fprintf('K_range = %s | Folds = %d | Subsample fraction = %.2f\n', ...
     mat2str(K_range), N, Pcc/100);
 
-tStart = tic;
+tStart = tic; 
 Consensus = [];
 
-for k = K_range
+for idxK = 1:numel(K_range)
+    k = K_range(idxK);
     fprintf('\n>>> Running consensus clustering for K = %d ...\n', k);
     tK = tic;
 
-    % Like GUI
-    [Ck] = CAP_ConsensusClustering( ...
+    % Call consensus clustering
+    Ck = CAP_ConsensusClustering( ...
         Xonp{ReferencePopulation}, k, 'items', Pcc/100, N, 'correlation');
 
-    Ck = single(Ck);   % <<< force single precision to halve memory
+    % --- cleanup like GUI ---
+    Ck(~isfinite(Ck)) = 0;
 
-    % Allocate and store
+    % Shrink precision
+    Ck = single(Ck);
+
+    % Allocate storage on first run
     if isempty(Consensus)
         Consensus = zeros(size(Ck,1), size(Ck,2), numel(K_range), 'single');
     end
-    Consensus(:,:,K_range==k) = Ck;
 
-    fprintf('...done (%.2f sec)\n', toc(tK));
+    Consensus(:,:,idxK) = Ck;
     clear Ck
-end
-fprintf('\nAll consensus clustering finished in %.2f seconds.\n', toc(tStart));
 
-% Compute quality metrics
+    % Timing info
+    elapsedK = toc(tK);
+    totalElapsed = toc(tStart);
+    estTotal = totalElapsed / idxK * numel(K_range); % rough estimate
+    fprintf('...done (%.2f sec). Cumulative = %.1f min. Est. total = %.1f min.\n', ...
+        elapsedK, totalElapsed/60, estTotal/60);
+end
+
+fprintf('\nAll consensus clustering finished in %.2f minutes.\n', toc(tStart)/60);
+
 [~, Qual] = ComputeClusteringQuality(Consensus, K_range);
+diary off
 
 % % Plot quality curves
-figure(2);
-plot(K_range, Qual(2,1:numel(K_range)), '-o', 'LineWidth', 2, 'MarkerSize', 8);
-xlabel('K (# clusters)'); ylabel('Stability (1 - Lorena metric)');
-title('Consensus clustering quality'); grid on;
- 
+% figure(2);
+% plot(K_range, Qual(2,1:numel(K_range)), '-o', 'LineWidth', 2, 'MarkerSize', 8);
+% xlabel('K (# clusters)'); ylabel('Stability (1 - Lorena metric)');
+% title('Consensus clustering quality'); grid on;
+% 
 % figure(3);
 % bar(K_range, 1 - Qual(2,1:numel(K_range)), 'FaceColor',[0.3 0.6 0.9]);
 % xlabel('K (# clusters)'); ylabel('Stability (1 - Lorena metric)');
@@ -398,7 +388,6 @@ title('Consensus clustering quality'); grid on;
 % outfile = fullfile(save_dir, sprintf('Consensus_%s.mat', datestr(now,'yyyymmdd_HHMM')));
 % save(outfile, 'Consensus','K_range','N','Pcc','-v7.3');
 % fprintf('\nConsensus results saved to: %s\n', outfile);
-diary off;
 
 
 %% 5) CAP clustering 
@@ -412,6 +401,8 @@ n_rep = 5;          % small for test; increase later
 % IMPORTANT: use the same orientation the GUI uses: [n_vox × n_frames]
 Xon_forClust = cell2mat(Xonp{ReferencePopulation});     % [vox × frames]
 fprintf('Clustering on %d vox × %d frames\n', size(Xon_forClust,1), size(Xon_forClust,2));
+clear Xonp   % free ~8–10 GB immediately
+
 
 % Run clustering exactly like the GUI ClusterButton does for seed-free:
 [CAP, Disp, STDCAP, idx, CorrDist, sfrac] = Run_Clustering( ...
